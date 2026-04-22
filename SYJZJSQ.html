@@ -604,7 +604,19 @@
         calculateTrade();
     });
 
-    document.getElementById('f_pp').addEventListener('change', (e) => e.target.checked ? document.getElementById('wrap_pp').classList.remove('tc-hidden') : document.getElementById('wrap_pp').classList.add('tc-hidden'));
+    // 修复：支付宝与 PayPal 互斥单选逻辑
+    document.getElementById('f_ali').addEventListener('change', (e) => {
+        if (e.target.checked) {
+            document.getElementById('f_pp').checked = false;
+            document.getElementById('wrap_pp').classList.add('tc-hidden'); // 隐藏防争议勾选框
+        }
+    });
+    document.getElementById('f_pp').addEventListener('change', (e) => {
+        if (e.target.checked) {
+            document.getElementById('f_ali').checked = false;
+        }
+        e.target.checked ? document.getElementById('wrap_pp').classList.remove('tc-hidden') : document.getElementById('wrap_pp').classList.add('tc-hidden');
+    });
     document.getElementById('f_multi').addEventListener('change', (e) => { document.getElementById('wrap_multi').classList.toggle('tc-hidden', !e.target.checked); if(e.target.checked) document.querySelectorAll('.tc-multi-item').forEach(el => updateCompPnL(el.id.replace('comp_wrap_',''))); });
 
     function validateForm() {
