@@ -1,0 +1,906 @@
+<script>
+(function() {
+    'use strict';
+
+    if (window.__TradeCalcLoaded) return;
+    window.__TradeCalcLoaded = true;
+
+    const oldWrapper = document.getElementById('trade-calc-wrapper');
+    if (oldWrapper) oldWrapper.remove();
+    const oldStyle = document.getElementById('trade-calc-style');
+    if (oldStyle) oldStyle.remove();
+
+    window.__TradeServerData = {};
+    window.__TradeCart = []; 
+    window.__TradeEditingId = null;
+    window.__CurrentMode = 'sell'; 
+
+    // ==========================================
+    // 1. CSS 样式 (宽屏、暗黑适配、预览台)
+    // ==========================================
+    const style = document.createElement('style');
+    style.id = 'trade-calc-style';
+    style.textContent = `
+        :root {
+            --purcarte-card-color: hsl(var(--card) / 0.95); --gray-12: hsl(var(--foreground));
+            --gray-11: hsl(var(--muted-foreground)); --gray-a5: hsl(var(--border) / 0.5);
+            --gray-a4: hsl(var(--border) / 0.35); --gray-a2: hsl(var(--border) / 0.16);
+            --accent-11: hsl(var(--primary)); --accent-9: hsl(var(--primary));
+            --red-11: hsl(var(--destructive)); --green-11: rgb(22 163 74);
+            --accent-fg: hsl(var(--primary-foreground, 0 0% 100%)); 
+        }
+        .dark { --purcarte-card-color: hsl(var(--card) / 0.88); --gray-a5: hsl(var(--border) / 0.56); --accent-fg: hsl(var(--primary-foreground, 222.2 47.4% 11.2%)); }
+        
+        .trade-calc-ball { position: fixed; right: 20px; top: 130px; width: 45px; height: 45px; border-radius: 50%; background-color: var(--purcarte-card-color); border: 1px solid var(--gray-a5); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 4px 12px var(--gray-a4); z-index: 1041; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s ease; color: var(--accent-11); }
+        .trade-calc-ball:hover { transform: scale(1.1); color: var(--accent-9); }
+
+        .trade-calc-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0, 0, 0, 0.4); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); z-index: 99998; display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.3s ease, visibility 0.3s; }
+        .trade-calc-overlay.show { opacity: 1; visibility: visible; pointer-events: auto; }
+
+        .trade-calc-modal { width: 95%; max-width: 680px; background-color: var(--purcarte-card-color); border: 1px solid var(--gray-a5); border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.3); color: var(--gray-12); transform: scale(0.95); transition: transform 0.3s ease; overflow: hidden; max-height: 92vh; display: flex; flex-direction: column; position: relative;}
+        
+        .trade-calc-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px; border-bottom: 1px solid var(--gray-a5); flex-shrink: 0; }
+        .trade-calc-title { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1.1rem; color: var(--accent-11); margin: 0; }
+        .trade-calc-close { background: none; border: none; color: var(--gray-12); cursor: pointer; transition: color 0.3s, transform 0.3s; }
+        .trade-calc-close:hover { color: var(--accent-9); transform: rotate(90deg); }
+
+        .tc-tabs { display: flex; background: var(--gray-a2); border-radius: 8px; padding: 4px; margin-bottom: 16px; }
+        .tc-tab { flex: 1; text-align: center; padding: 10px; font-size: 0.9rem; font-weight: bold; color: var(--gray-11); cursor: pointer; border-radius: 6px; transition: 0.2s; }
+        .tc-tab.active { background: var(--purcarte-card-color); color: var(--accent-11); box-shadow: 0 2px 6px var(--gray-a4); }
+
+        .tc-view-container { display: flex; width: 300%; flex: 1; transition: transform 0.35s cubic-bezier(0.25, 1, 0.5, 1); overflow: hidden; }
+        .tc-view { width: 33.3333%; display: flex; flex-direction: column; flex-shrink: 0; max-height: 100%; }
+
+        .trade-calc-body { padding: 20px; overflow-y: auto; flex: 1; }
+        .trade-calc-body::-webkit-scrollbar { width: 6px; }
+        .trade-calc-body::-webkit-scrollbar-thumb { background: var(--gray-a4); border-radius: 4px; }
+        .trade-calc-footer { padding: 16px 20px; border-top: 1px solid var(--gray-a5); flex-shrink: 0; background: var(--purcarte-card-color); }
+
+        .trade-input-group { margin-bottom: 14px; }
+        .trade-input-group.flex-row { 
+            display: grid !important; 
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important; 
+            gap: 16px 12px !important; 
+        }
+        .trade-input-group.flex-row > div { width: 100% !important; }
+        .trade-label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--gray-11); margin-bottom: 6px; }
+        /* 强制所有输入框统一高度为 38px，治愈强迫症 */
+        .trade-input, .trade-select { 
+            width: 100%; 
+            height: 38px; 
+            padding: 8px 12px; 
+            background: var(--gray-a2); border: 1px solid var(--gray-a5); border-radius: 6px; color: var(--gray-12); font-size: 0.85rem; outline: none; transition: border-color 0.2s; box-sizing: border-box; 
+            margin: 0;
+        }
+        /* 关键：洗掉手机端 iOS/Android 原生输入框的默认内边距和加粗放大效果 */
+        input.trade-input {
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        /* 修正日期控件在手机上的毛病，摒弃 Flex 避免手机端高度崩塌 */
+        input[type="date"].trade-input { 
+            display: block; 
+            line-height: 20px; 
+        }
+
+        .trade-select.highlight { background: rgba(34, 197, 94, 0.08); border-color: var(--green-11); }
+        .trade-input:focus, .trade-select:focus { border-color: var(--accent-9); background: rgba(0,0,0,0.1); }
+        .trade-input-with-symbol { display: flex; align-items: center; gap: 6px; }
+        /* 带有符号的下拉框同步应用 38px 高度 */
+        .trade-input-with-symbol select { width: 85px; flex-shrink: 0; padding: 8px 6px; height: 38px; }
+        .trade-select option { background-color: #ffffff; color: #111827; }
+        .dark .trade-select option, html.dark .trade-select option { background-color: #1f2937; color: #f9fafb; }
+
+        .trade-toggle-btn { background: transparent; border: 1px solid var(--gray-a5); color: var(--gray-11); padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; }
+        .trade-toggle-btn:hover { color: var(--accent-11); border-color: var(--accent-11); }
+        .tc-btn-flat { border-color: var(--green-11); color: var(--green-11); font-weight: bold; white-space: nowrap; padding: 8px 10px; height: 100%; display: flex; align-items: center; justify-content: center; }
+        .tc-btn-flat:hover { background: rgba(22, 163, 74, 0.1); }
+
+        .trade-result-box { background: var(--gray-a2); border: 1px solid var(--gray-a5); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
+        .trade-result-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; font-size: 0.9rem; }
+        .trade-result-row:not(:last-child) { border-bottom: 1px dashed var(--gray-a4); }
+        input.trade-result-value { border: none; background: transparent; text-align: right; padding: 0; width: 220px; font-family: inherit; font-weight: 700; font-size: 1.05rem; color: var(--accent-11); outline: none; cursor: default; }
+        .tc-text-profit { color: var(--green-11) !important; font-weight: bold; } 
+        .tc-text-loss { color: var(--red-11) !important; font-weight: bold; } 
+
+        .tc-post-section { background: rgba(0,0,0,0.02); border: 1px solid var(--gray-a4); border-radius: 8px; padding: 16px; margin-top: 16px; }
+        .dark .tc-post-section { background: rgba(255,255,255,0.02); }
+        .tc-post-title { font-size: 0.9rem; font-weight: bold; color: var(--accent-11); margin-bottom: 12px; display: flex; align-items: center; gap: 6px;}
+        /* 彻底解决参数区挤在一排的问题 */
+        .tc-grid { 
+            display: grid !important; 
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important; 
+            gap: 16px 12px !important; 
+            margin-bottom: 16px !important; 
+        }
+        .tc-checkbox-group { display: flex; gap: 12px; align-items: center; margin-top: 4px; flex-wrap: wrap;}
+        .tc-checkbox-group label { display: flex; align-items: center; gap: 4px; font-size: 0.85rem; cursor: pointer; color: var(--gray-12);}
+        
+        .tc-hidden { display: none !important; }
+        .tc-slide-box { margin-top: 10px; padding: 12px; background: var(--gray-a2); border-left: 2px solid var(--accent-11); border-radius: 0 4px 4px 0; }
+        
+        .tc-multi-item { border-bottom: 1px dashed var(--gray-a4); padding-bottom: 12px; margin-bottom: 12px; }
+        .tc-multi-item:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+        .tc-comp-pricing { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+        .tc-comp-btn { background: var(--gray-a4); border: none; color: var(--gray-12); padding: 6px 10px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; white-space: nowrap; }
+        .tc-comp-btn:hover { background: var(--accent-11); color: #fff; }
+
+        .tc-cart-view-body { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; }
+        .tc-cart-card { border: 1px solid var(--gray-a5); border-radius: 8px; padding: 14px; background: var(--gray-a2); position: relative; }
+        .tc-cart-card-header { font-weight: bold; font-size: 0.95rem; color: var(--accent-11); margin-bottom: 10px; border-bottom: 1px solid var(--gray-a5); padding-bottom: 8px; display: flex; justify-content: space-between;}
+        .tc-cart-badge-sell { background: var(--accent-11); color: var(--accent-fg); padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+        .tc-cart-badge-buy { background: var(--green-11); color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; }
+        .tc-cart-detail { font-size: 0.85rem; display: flex; justify-content: space-between; margin-bottom: 6px; color: var(--gray-11); }
+        .tc-cart-comp { padding-left: 12px; border-left: 2px solid var(--gray-a4); margin-top: 8px; }
+        .tc-cart-actions { display: flex; gap: 12px; margin-top: 12px; justify-content: flex-end; }
+        .tc-action-btn { background: none; border: none; font-size: 0.85rem; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+        .tc-action-btn.edit { color: var(--accent-11); }
+        .tc-action-btn.del { color: var(--red-11); }
+        .tc-action-btn:hover { opacity: 0.7; }
+        
+        .tc-grand-total { border: 1px solid var(--gray-a5); border-radius: 8px; padding: 14px; margin-top: auto; transition: all 0.3s; }
+        .tc-grand-total.profit { background: rgba(22, 163, 74, 0.08); border-color: var(--green-11); }
+        .tc-grand-total.loss { background: rgba(239, 68, 68, 0.08); border-color: var(--red-11); }
+        .tc-grand-row { display: flex; justify-content: space-between; font-size: 0.95rem; margin-bottom: 8px; font-weight: bold; color: var(--gray-12); }
+
+        .tc-preview-area { width: 100%; height: 100%; min-height: 380px; background: var(--gray-a2); border: 1px solid var(--gray-a5); border-radius: 8px; padding: 14px; color: var(--gray-12); font-family: monospace; font-size: 0.9rem; resize: none; outline: none; line-height: 1.5; }
+        .tc-preview-area:focus { border-color: var(--accent-11); }
+
+        .trade-btn-group { display: flex; gap: 10px; margin-top: 12px;}
+        .trade-btn { flex: 1; padding: 12px; border-radius: 8px; border: none; font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; display: flex; justify-content: center; align-items: center; gap: 6px; }
+        .trade-btn-sell { background-color: var(--accent-11); color: var(--accent-fg); }
+        .trade-btn-sell:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        .trade-btn-buy { background-color: var(--gray-a2); color: var(--gray-12); border: 1px solid var(--gray-a5); }
+        .trade-btn-buy:hover { background-color: var(--gray-a4); transform: translateY(-1px); }
+        .trade-btn-cart { background-color: transparent; color: var(--accent-11); border: 1px dashed var(--accent-11); }
+        .trade-btn-cart:hover { background-color: rgba(0,0,0,0.05); }
+
+        .trade-toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(20px); background-color: var(--gray-12); color: var(--purcarte-card-color); padding: 12px 24px; border-radius: 24px; font-size: 0.95rem; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.2); z-index: 99999; opacity: 0; visibility: hidden; transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55); text-align: center; }
+        .trade-toast.show { opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0); }
+
+        /* ======== 手机端适配代码加在这里 ======== */
+        @media (max-width: 640px) {
+            /* 手机端自动变成单列，彻底告别拥挤 */
+            .tc-grid { grid-template-columns: 1fr !important; gap: 12px !important; }
+            .trade-input-group.flex-row { flex-direction: column; gap: 12px; }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // ==========================================
+    // 2. HTML 结构 (出收双表单)
+    // ==========================================
+    const container = document.createElement('div');
+    container.id = 'trade-calc-wrapper';
+    container.innerHTML = `
+        <div id="trade-calc-ball" class="trade-calc-ball" title="VPS 交易工作站"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2" ry="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="16" y1="14" x2="16.01" y2="14"/><line x1="12" y1="14" x2="12.01" y2="14"/><line x1="8" y1="14" x2="8.01" y2="14"/><line x1="16" y1="10" x2="16.01" y2="10"/><line x1="12" y1="10" x2="12.01" y2="10"/><line x1="8" y1="10" x2="8.01" y2="10"/><line x1="16" y1="18" x2="16.01" y2="18"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="8" y1="18" x2="8.01" y2="18"/></svg></div>
+        <div id="trade-calc-overlay" class="trade-calc-overlay">
+            <div id="trade-calc-modal" class="trade-calc-modal">
+                <div class="trade-calc-header">
+                    <h3 class="trade-calc-title"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg><span id="tc-main-title">交易与发帖助手</span></h3>
+                    <button class="trade-calc-close" id="trade-calc-close"><svg width="18" height="18" fill="currentColor" viewBox="0 0 16 16"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854Z"/></svg></button>
+                </div>
+                
+                <div class="tc-view-container" id="tc-view-container">
+                    
+                    <div class="tc-view" id="tc-view-form">
+                        <div class="trade-calc-body">
+                            <div class="tc-tabs">
+                                <div class="tc-tab active" id="tc-tab-sell">📤 闲置出机</div>
+                                <div class="tc-tab" id="tc-tab-buy">📥 预算收机</div>
+                            </div>
+
+                            <div id="tc-section-sell">
+                                <div class="trade-input-group">
+                                    <label class="trade-label">选择要出的机器</label>
+                                    <select id="tc-server-select" class="trade-select highlight"><option value="">-- 手动填或从探针选择 --</option></select>
+                                </div>
+                                <div class="trade-input-group">
+                                    <label class="trade-label">购入原价 <span style="color:var(--red-11);">*</span><span id="tc-ex-rate-hint" style="font-weight:normal; margin-left:8px; color:var(--accent-11); font-size: 0.75rem;"></span></label>
+                                    <div class="trade-input-with-symbol">
+                                        <select id="tc-currency" class="trade-select"><option value="CNY">¥ CNY</option><option value="USD">$ USD</option><option value="HKD">$ HKD</option><option value="EUR">€ EUR</option><option value="GBP">£ GBP</option></select>
+                                        <input type="number" id="tc-price" class="trade-input" placeholder="输入原价" step="0.01" min="0">
+                                    </div>
+                                </div>
+                                <div class="trade-input-group flex-row">
+                                    <div><label class="trade-label">计费周期</label><select id="tc-cycle" class="trade-select"><option value="365">年付 (365天)</option><option value="182.5">半年付 (182.5天)</option><option value="90">季付 (90天)</option><option value="30">月付 (30天)</option></select></div>
+                                    <div><label class="trade-label">到期时间 <span style="color:var(--red-11);">*</span></label><input type="date" id="tc-expiry" class="trade-input"></div>
+                                </div>
+                                <div class="trade-input-group flex-row">
+                                    <div><label class="trade-label">当前交易日期</label><input type="date" id="tc-trade-date" class="trade-input"></div>
+                                    <div>
+                                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                                            <label class="trade-label" id="tc-sell-label" style="margin-bottom:0;">本台明盘价 <span style="color:var(--red-11);">*</span></label>
+                                            <button id="tc-mode-toggle" class="trade-toggle-btn" type="button">切溢价</button>
+                                        </div>
+                                        <div class="trade-input-with-symbol">
+                                            <select id="tc-sell-currency" class="trade-select"><option value="CNY">¥</option><option value="USD">$</option><option value="EUR">€</option></select>
+                                            <input type="number" id="tc-sell-price" class="trade-input" placeholder="出机售价" step="0.01">
+                                            <button type="button" id="tc-btn-sell-flat" class="trade-toggle-btn tc-btn-flat" title="一键填入剩余价值">⚡剩价出</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="trade-result-box">
+                                    <div class="trade-result-row"><span>剩余价值</span><input readonly class="trade-result-value" id="tc-res-remain" value="¥ 0.00" /></div>
+                                    <div class="trade-result-row"><span>折合明盘售价</span><input readonly class="trade-result-value" id="tc-res-total" value="-" /></div>
+                                    <div class="trade-result-row"><span>折合盈亏占比</span><input readonly class="trade-result-value" id="tc-res-premium" value="-" /></div>
+                                </div>
+
+                                <div class="tc-post-section">
+                                    <div class="tc-post-title">发帖参数区 <span style="font-size:0.75rem; color:var(--gray-11); font-weight:normal; margin-left:auto;">已智能提取，请核对</span></div>
+                                    <div class="tc-grid">
+                                        <div><label class="trade-label">机器/商家 <span style="color:var(--red-11);">*</span></label><input type="text" id="f_mer" class="trade-input" placeholder="名称必填"></div>
+                                        <div><label class="trade-label">区域 (提取旗帜)</label><input type="text" id="f_reg" class="trade-input" placeholder="如 HK, US"></div>
+                                        <div><label class="trade-label">宽带</label><input type="text" id="f_bw" class="trade-input" placeholder="如 1000Mbps"></div>
+                                        <div><label class="trade-label">流量</label><input type="text" id="f_tr" class="trade-input" placeholder="如 无限流量"></div>
+                                        <div><label class="trade-label">线路</label><input type="text" id="f_rt" class="trade-input" placeholder="如 CN2 GIA"></div>
+                                        <div><label class="trade-label">交易方式</label><input type="text" id="f_tm" class="trade-input" value="Push" placeholder="Push/带原邮"></div>
+                                    </div>
+                                    <div>
+                                        <label class="trade-label">标签选项</label>
+                                        <div class="tc-checkbox-group">
+                                            <label><input type="checkbox" id="f_v4"> IPv4</label> <label><input type="checkbox" id="f_v6"> IPv6</label>
+                                            <label style="color:var(--accent-11);"><input type="checkbox" id="f_ali"> 支付宝</label>
+                                            <label style="color:var(--accent-11);"><input type="checkbox" id="f_pp"> PayPal</label>
+                                            <label style="color:var(--green-11); font-weight:bold;"><input type="checkbox" id="f_multi"> 含伴生机</label>
+                                        </div>
+                                        <div class="tc-slide-box tc-hidden" id="wrap_pp"><label style="font-size:0.85rem; cursor:pointer; color:var(--gray-12);"><input type="checkbox" id="f_pp_safe"> 支付超半年(防争议)</label></div>
+                                        <div class="tc-slide-box tc-hidden" id="wrap_multi" style="border-color:var(--green-11);">
+                                            <div style="font-size:0.8rem; color:var(--gray-11); margin-bottom:6px;">勾选同号伴生机并设置独立定价：</div>
+                                            <div id="tc-multi-list-container"></div>
+                                        </div>
+                                    </div>
+                                    <div style="margin-top:10px;"><input type="text" id="f_nt" class="trade-input" placeholder="自定义备注说明 (选填)"></div>
+                                </div>
+                            </div>
+
+                            <div id="tc-section-buy" class="tc-hidden">
+                                <div class="tc-post-section" style="margin-top:0;">
+                                    <div class="tc-post-title">📥 求购要求定制</div>
+                                    <div class="tc-grid" style="grid-template-columns: 1fr;">
+                                        <div><label class="trade-label">快捷导入 (从探针当前展示服务器中选)</label><select id="b_quick_import" class="trade-select highlight"><option value="">-- 手动填或点此快捷选择 --</option></select></div>
+                                        <div><label class="trade-label">目标商家/型号 <span style="color:var(--red-11);">*</span></label><input type="text" id="b_mer" class="trade-input" placeholder="如：搬瓦工 DC9 / 斯巴达 36刀"></div>
+                                    </div>
+                                    <div class="tc-grid">
+                                        <div>
+                                            <label class="trade-label">我的预算 <span style="color:var(--red-11);">*</span></label>
+                                            <div class="trade-input-with-symbol">
+                                                <select id="b_cur" class="trade-select"><option value="CNY">¥</option><option value="USD">$</option><option value="EUR">€</option></select>
+                                                <input type="number" id="b_budget" class="trade-input" placeholder="最高接受价格">
+                                            </div>
+                                        </div>
+                                        <div><label class="trade-label">IP 状态要求</label><select id="b_ip" class="trade-select"><option value="无要求 (都可以)">无要求 (都可以)</option><option value="必须干净正常">必须干净正常</option><option value="被墙也可">被墙也可</option><option value="特定段(见备注)">特定段(见备注)</option></select></div>
+                                        <div><label class="trade-label">流媒体/解锁</label><input type="text" id="b_unlock" class="trade-input" placeholder="如 必解 Netflix"></div>
+                                        <div><label class="trade-label">到期时间要求</label><input type="text" id="b_time" class="trade-input" placeholder="如 剩余>3个月"></div>
+                                    </div>
+                                    <div class="tc-grid" style="grid-template-columns: 1fr;">
+                                        <div><label class="trade-label">交易方式要求</label><input type="text" id="b_acc" class="trade-input" value="带原邮 / Push皆可"></div>
+                                        <div><label class="trade-label">多机处理</label><select id="b_multi" class="trade-select"><option value="不接受一号多机 (必须单号单机)">不接受一号多机 (必须单号单机)</option><option value="可接受伴生机 (视伴生价值而定)">可接受伴生机 (视伴生价值而定)</option></select></div>
+                                        <div style="margin-top:2px;"><label class="trade-label">补充说明(批次/节点等)</label><input type="text" id="b_nt" class="trade-input" placeholder="如：只要 2022 年黑五款、特定节点优先"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="trade-calc-footer">
+                            <div class="trade-btn-group">
+                                <button id="tc-btn-add-cart" class="trade-btn trade-btn-cart">+ 存入暂存车</button>
+                                <button id="tc-btn-go-cart" class="trade-btn trade-btn-buy" style="flex:1.5;">🛒 前往结算台 (<span id="tc-cart-count">0</span>)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tc-view" id="tc-view-cart">
+                        <div class="tc-cart-view-body" id="tc-cart-items-wrapper"></div>
+                        <div class="trade-calc-footer">
+                            <div style="display:flex; gap:10px; margin-bottom: 12px;">
+                                <input type="text" id="f_g_contact" class="trade-input" style="flex:1;" placeholder="留空默认: 站内私信">
+                                <input type="text" id="f_g_note" class="trade-input" style="flex:1;" placeholder="留空默认: 支付宝/中介费自理">
+                            </div>
+                            <div class="trade-btn-group">
+                                <button id="tc-btn-back-form" class="trade-btn trade-btn-buy" style="flex: 0.5;">返回</button>
+                                <button id="tc-btn-gen-sell" class="trade-btn trade-btn-sell" style="flex: 1;">生成出机帖</button>
+                                <button id="tc-btn-gen-buy" class="trade-btn trade-btn-sell" style="flex: 1; background-color: var(--green-11);">生成收机帖</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tc-view" id="tc-view-preview">
+                        <div class="trade-calc-body" style="display:flex; flex-direction:column; gap:12px;">
+                            <div style="font-size:0.9rem; color:var(--gray-11); font-weight:bold;">📝 预览并自由编辑帖子内容：</div>
+                            <textarea id="tc-post-content" class="tc-preview-area"></textarea>
+                        </div>
+                        <div class="trade-calc-footer">
+                            <div class="trade-btn-group">
+                                <button id="tc-btn-back-cart" class="trade-btn trade-btn-buy" style="flex: 0.5;">上一步</button>
+                                <button id="tc-btn-copy-done" class="trade-btn trade-btn-sell" style="flex: 1.5;">📋 复制并发帖</button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+        <div id="trade-calc-toast" class="trade-toast">提示信息</div>
+    `;
+    document.body.appendChild(container);
+
+    // ==========================================
+    // 3. 核心抓取逻辑与数据缓存 (极致准确版)
+    // ==========================================
+    let exchangeRates = { CNY: 1, USD: 0.14, HKD: 1.08, EUR: 0.13, GBP: 0.11 }; 
+    let isPremiumMode = false;
+
+    const dom = {
+        toast: document.getElementById('trade-calc-toast'), container: document.getElementById('tc-view-container'),
+        mainTitle: document.getElementById('tc-main-title'), cartCount: document.getElementById('tc-cart-count'),
+        cartItemsWrapper: document.getElementById('tc-cart-items-wrapper'), multiList: document.getElementById('tc-multi-list-container')
+    };
+
+    function showToast(msg) { dom.toast.textContent = msg; dom.toast.classList.add('show'); setTimeout(() => dom.toast.classList.remove('show'), 2500); }
+
+    async function fetchRates() {
+        try { const res = await fetch('https://open.er-api.com/v6/latest/CNY'); const data = await res.json(); if (data && data.rates) { exchangeRates = data.rates; document.getElementById('tc-ex-rate-hint').textContent = '(已应用实时汇率)'; calculateTrade(); } } catch (e) {}
+    }
+
+    function convertToCNY(val, cur) { if (!val || isNaN(val)) return 0; if (cur === 'CNY' || !exchangeRates[cur]) return parseFloat(val); return parseFloat(val) / exchangeRates[cur]; }
+    function formatCur(val, cur) { const sym = {'CNY':'¥','USD':'$','HKD':'HK$','EUR':'€','GBP':'£'}; return `${sym[cur]||''} ${val.toFixed(2)}`; }
+
+    // 最核心的解析逻辑
+    function parseNodePriceLocal(text) {
+        if (text.match(/价格:\s*(免费|Free|0|-1)/i)) return null;
+        const normalMatch = text.match(/价格:\s*([^\/\n]+)(?:\s*\/\s*([^\s\n]+))?/);
+        if (!normalMatch) return null;
+        let priceStr = normalMatch[1].trim(), periodStr = normalMatch[2], period = 'month'; 
+        if (periodStr) { if (periodStr.match(/年|yr|year/i)) period = 'year'; else if (periodStr.match(/季/)) period = 'quarter'; else if (periodStr.match(/半年/)) period = 'half-year'; } 
+        else { if (text.match(/周期:\s*(一?年|年付)|年付/i)) period = 'year'; else if (text.match(/周期:\s*(一?季|季付)|季付/i)) period = 'quarter'; else if (text.match(/周期:\s*半年|半年付/i)) period = 'half-year'; }
+        let symbol = 'CNY'; 
+        if (priceStr.match(/\$|USD/i)) symbol = 'USD'; else if (priceStr.match(/HK\$|HKD/i)) symbol = 'HKD'; else if (priceStr.match(/€|EUR/i)) symbol = 'EUR'; else if (priceStr.match(/£|GBP/i)) symbol = 'GBP';
+        const numMatch = priceStr.replace(/,/g, '').match(/[\d.]+/); return { value: numMatch ? parseFloat(numMatch[0]) : 0, symbol, period };
+    }
+
+    function fastScanDOM() {
+        const cards = document.querySelectorAll('.rounded-lg.border.bg-card');
+        let newCache = {}; 
+        if (cards.length >= 3) {
+            let index = 0;
+            cards.forEach(card => {
+                const fullText = card.textContent.trim();
+                if (/^\s*(服务器总数|在线服务器|离线服务器|网络|Total Servers)/i.test(fullText) || fullText.includes('白嫖') || fullText.match(/价格:\s*(免费|Free|0|-1)/i)) return;
+                const pd = parseNodePriceLocal(fullText); if (!pd || pd.value === 0) return;
+                const nameEl = card.querySelector('p.font-bold, h2.font-bold, div.font-bold') || card.querySelector('p'); 
+                let sName = '';
+                if (nameEl) {
+                     const clone = nameEl.cloneNode(true);
+                    // 增加了对 .nz-stock-tag (库存标签) 的精准剔除
+                    const extras = clone.querySelectorAll('.nz-custom-footer, .vps-value-tag, .nz-btns, .nz-stock-tag');
+                    extras.forEach(el => el.remove());
+                    // 终极暴力清理：把有货、无货等状态字眼也全部拉黑干掉
+                    sName = clone.textContent.replace(/去抢购|去守候|已下架|测评|●\s*有货|○\s*无货|✖\s*已下架/g, '').trim();
+                }
+                if (!sName) return;
+
+                let exp = ''; const daysMatch = fullText.match(/剩余天数:\s*(\d+)/);
+                if (daysMatch) { const d = new Date(); d.setDate(d.getDate() + parseInt(daysMatch[1])); exp = d.toISOString().split('T')[0]; } 
+                else if (fullText.match(/剩余天数:\s*永久/i)) { const d = new Date(); d.setFullYear(d.getFullYear() + 100); exp = d.toISOString().split('T')[0]; }
+                let cycle = 30; if (pd.period === 'year') cycle = 365; else if (pd.period === 'half-year') cycle = 182.5; else if (pd.period === 'quarter') cycle = 90;
+
+                // 提取旗帜作为区域
+                const flagMatch = fullText.match(/[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/);
+                let regionFlag = flagMatch ? flagMatch[0] : '';
+
+                // 全局提取路由词汇
+                let rtTagsArray = [];
+                const routingRegex = /(三网|骨干|CN2|9929|CMIN2|GIA|BGP|CMI|CU|CT|4837|优化|直连|专线|IPLC|IEPL|AGA)/ig;
+                let match; while ((match = routingRegex.exec(fullText)) !== null) { const kw = match[0].toUpperCase(); if (!rtTagsArray.includes(kw)) rtTagsArray.push(kw); }
+                let isLuodi = /落地/.test(fullText);
+
+                let bw = "", tr = "", v4 = false, v6 = false, tags = [];
+                card.querySelectorAll('*').forEach(el => {
+                    if (el.children.length > 0) return; 
+                    
+                    // 【核心修复1】：划定“绝对隔离区”，直接无视你所有自定义插件生成的元素！
+                    if (el.closest('.nz-custom-footer, .vps-value-tag, .nz-ping-board, .nz-stock-tag, .nz-btns')) return;
+
+                    const txt = el.textContent.trim();
+                    
+                    // 【核心修复2】：双重保险，把测评、抢购、有无货等词汇加入正则表达式黑名单屏蔽
+                    if (!txt || txt.length > 60 || /CPU|内存|存储|上传|下载|价格|剩余|天|在线|离线|\d+\.\d+%|\d+\.\d+K\/s|B\/s|去抢购|去守候|已下架|测评|有货|无货|每日成本/i.test(txt)) return;
+                    
+                    if (/^\d+(Mbps|Gbps|Kbps)$/i.test(txt)) bw = txt; 
+                    else if (/^\d+(GB|TB|MB|PB)\/(Month|Mouth|mo)/i.test(txt)) tr = txt;
+                    else if (/无限|不限/i.test(txt)) tr = "无限流量";
+                    else if (/^IPv4$/i.test(txt)) v4 = true; 
+                    else if (/^IPv6$/i.test(txt)) v6 = true;
+                    else if (!txt.includes('修改') && !txt.includes('删除') && txt.length > 1) { 
+                        // 排除提取到纯 Emoji 旗帜
+                        if (!txt.match(/[\uD83C][\uDDE6-\uDDFF][\uD83C][\uDDE6-\uDDFF]/) && !tags.includes(txt)) {
+                            tags.push(txt); 
+                        }
+                    }
+                });
+
+                // 取最后一个标签作为商家
+                let mer = ""; if (tags.length > 0) mer = tags.pop();
+                let rt = "无优化"; if (rtTagsArray.length > 0) rt = rtTagsArray.join(', ');
+                if (isLuodi) rt = (rt === "无优化") ? "落地" : rt + " / 落地";
+
+                newCache['srv_' + index] = { id: 'srv_'+index, name: sName, price: pd.value, currency: pd.symbol, cycle: cycle, expiry: exp, bandwidth: bw, traffic: tr, ipv4: v4, ipv6: v6, merchant: mer, routing: rt, region: regionFlag };
+                index++;
+            });
+        }
+        
+        // 缓存策略：抓取成功则覆盖，否则尝试读取历史
+        if (Object.keys(newCache).length > 0) { window.__TradeServerData = newCache; localStorage.setItem('TradeCalc_ServerData', JSON.stringify(newCache)); } 
+        else { try { const saved = localStorage.getItem('TradeCalc_ServerData'); if (saved) window.__TradeServerData = JSON.parse(saved); } catch(e) {} }
+    }
+
+    const today = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+    document.getElementById('tc-trade-date').value = today.toISOString().split('T')[0];
+
+    // ==========================================
+    // 4. Tab 切换与价格计算
+    // ==========================================
+    document.getElementById('tc-tab-sell').addEventListener('click', () => { window.__CurrentMode = 'sell'; document.getElementById('tc-tab-sell').classList.add('active'); document.getElementById('tc-tab-buy').classList.remove('active'); document.getElementById('tc-section-sell').classList.remove('tc-hidden'); document.getElementById('tc-section-buy').classList.add('tc-hidden'); });
+    document.getElementById('tc-tab-buy').addEventListener('click', () => { window.__CurrentMode = 'buy'; document.getElementById('tc-tab-buy').classList.add('active'); document.getElementById('tc-tab-sell').classList.remove('active'); document.getElementById('tc-section-buy').classList.remove('tc-hidden'); document.getElementById('tc-section-sell').classList.add('tc-hidden'); });
+
+    function calcRemain(priceOrig, currency, cycleDays, expiryDateStr, tradeDateStr) {
+        if (!expiryDateStr || !tradeDateStr || !priceOrig) return 0;
+        let pCNY = convertToCNY(priceOrig, currency);
+        const diffMs = new Date(expiryDateStr + 'T00:00:00+08:00') - new Date(tradeDateStr + 'T00:00:00+08:00');
+        if (diffMs > 10 * 365 * 86400000) return pCNY;
+        return diffMs > 0 ? (pCNY / cycleDays) * (diffMs / 86400000) : 0;
+    }
+
+    document.getElementById('tc-mode-toggle').addEventListener('click', (e) => {
+        isPremiumMode = !isPremiumMode;
+        const lbl = document.getElementById('tc-sell-label'), inp = document.getElementById('tc-sell-price');
+        if (isPremiumMode) { lbl.innerHTML = '本台期望溢价 <span style="color:var(--red-11);">*</span>'; e.target.textContent = '切明盘'; inp.placeholder = '正数溢价/负折价'; } 
+        else { lbl.innerHTML = '本台明盘价 <span style="color:var(--red-11);">*</span>'; e.target.textContent = '切溢价'; inp.placeholder = '输入出机售价'; }
+        calculateTrade();
+    });
+
+    document.getElementById('tc-btn-sell-flat').addEventListener('click', () => {
+        const remStr = document.getElementById('tc-res-remain').value.replace('¥ ', '');
+        const remVal = parseFloat(remStr);
+        if (!isNaN(remVal) && remVal > 0) {
+            if (isPremiumMode) document.getElementById('tc-mode-toggle').click();
+            document.getElementById('tc-sell-currency').value = 'CNY'; 
+            document.getElementById('tc-sell-price').value = remVal.toFixed(2);
+            calculateTrade();
+        } else { showToast('⚠️ 请先完善原价和到期时间，算出剩余价值后再点击'); }
+    });
+
+    function calculateTrade() {
+        if (window.__CurrentMode === 'buy') return;
+        const pInp = parseFloat(document.getElementById('tc-price').value), cur = document.getElementById('tc-currency').value;
+        const cyc = parseFloat(document.getElementById('tc-cycle').value), exp = document.getElementById('tc-expiry').value;
+        const tDate = document.getElementById('tc-trade-date').value, sInp = parseFloat(document.getElementById('tc-sell-price').value), sCur = document.getElementById('tc-sell-currency').value;
+        
+        const eRem = document.getElementById('tc-res-remain'), eTot = document.getElementById('tc-res-total'), ePre = document.getElementById('tc-res-premium');
+        if (isNaN(pInp) || !exp || !tDate) { eRem.value = '¥ 0.00'; eTot.value = '-'; ePre.value = '-'; ePre.className = 'trade-result-value'; return; }
+        
+        let remCNY = calcRemain(pInp, cur, cyc, exp, tDate); eRem.value = `¥ ${remCNY.toFixed(2)}`;
+
+        if (!isNaN(sInp)) {
+            let sellCNY = 0, premCNY = 0;
+            if (isPremiumMode) { premCNY = convertToCNY(sInp, sCur); sellCNY = remCNY + premCNY; } 
+            else { sellCNY = convertToCNY(sInp, sCur); premCNY = sellCNY - remCNY; }
+            
+            const rate = remCNY > 0 ? (premCNY / remCNY * 100).toFixed(2) : 0;
+            eTot.value = `¥ ${sellCNY.toFixed(2)}`;
+            let rateStr = premCNY === 0 ? "(平价出)" : `(${rate > 0 ? '+' : ''}${rate}%)`;
+            ePre.value = `${premCNY > 0 ? '+' : ''}${premCNY.toFixed(2)} ${rateStr}`;
+            ePre.className = `trade-result-value ${premCNY > 0 ? 'tc-text-profit' : (premCNY < 0 ? 'tc-text-loss' : '')}`;
+        } else { eTot.value = '-'; ePre.value = '-'; ePre.className = 'trade-result-value'; }
+    }
+
+    ['tc-price', 'tc-currency', 'tc-cycle', 'tc-expiry', 'tc-trade-date', 'tc-sell-price', 'tc-sell-currency'].forEach(id => {
+        document.getElementById(id).addEventListener('input', calculateTrade); document.getElementById(id).addEventListener('change', calculateTrade);
+    });
+    document.getElementById('tc-trade-date').addEventListener('change', () => { document.querySelectorAll('.tc-multi-item').forEach(el => updateCompPnL(el.id.replace('comp_wrap_',''))); });
+
+    // ==========================================
+    // 5. 伴生机独立计算
+    // ==========================================
+    function renderCompanionList() {
+        dom.multiList.innerHTML = ''; const cached = window.__TradeServerData || {};
+        for (const [id, data] of Object.entries(cached)) {
+            const tDate = document.getElementById('tc-trade-date').value;
+            const remCNY = calcRemain(data.price, data.currency, data.cycle, data.expiry, tDate);
+            const html = `
+                <div class="tc-multi-item" id="comp_wrap_${id}">
+                    <label><input type="checkbox" class="tc-comp-cb" value="${id}"> ${data.name}</label>
+                    <div class="tc-comp-pricing tc-hidden" id="comp_pricing_${id}">
+                        <div style="display:flex; gap:6px; margin-bottom:6px;">
+                            <select class="trade-select tc-comp-mode" style="width:65px; padding:6px;"><option value="price">售价</option><option value="prem">溢价</option></select>
+                            <select class="trade-select tc-comp-cur" style="width:60px; padding:6px;"><option value="CNY">¥</option><option value="USD">$</option><option value="EUR">€</option></select>
+                            <input type="number" class="trade-input tc-comp-val" style="flex:1; padding:6px;" placeholder="金额">
+                            <button type="button" class="tc-comp-btn tc-comp-btn-flat">⚡剩价出</button>
+                        </div>
+                    </div>
+                    <div style="font-size:0.8rem; color:var(--gray-11); padding-left:20px;">剩余: <span id="comp_rem_${id}">¥ ${remCNY.toFixed(2)}</span> | 折合明盘: <span id="comp_sell_${id}">-</span> | 盈亏: <span id="comp_pnl_${id}">-</span></div>
+                </div>
+            `;
+            dom.multiList.insertAdjacentHTML('beforeend', html);
+        }
+        if (Object.keys(cached).length === 0) dom.multiList.innerHTML = '<div style="font-size:0.8rem;">暂无其他机器</div>';
+
+        document.querySelectorAll('.tc-comp-cb').forEach(cb => { cb.addEventListener('change', (e) => { const id = e.target.value; const box = document.getElementById(`comp_pricing_${id}`); e.target.checked ? box.classList.remove('tc-hidden') : box.classList.add('tc-hidden'); updateCompPnL(id); }); });
+        document.querySelectorAll('.tc-comp-val').forEach(inp => inp.addEventListener('input', (e) => updateCompPnL(e.target.closest('.tc-multi-item').id.replace('comp_wrap_',''))));
+        document.querySelectorAll('.tc-comp-mode, .tc-comp-cur').forEach(sel => sel.addEventListener('change', (e) => updateCompPnL(e.target.closest('.tc-multi-item').id.replace('comp_wrap_',''))));
+        document.querySelectorAll('.tc-comp-btn-flat').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const id = e.target.closest('.tc-multi-item').id.replace('comp_wrap_',''); const wrap = document.getElementById(`comp_wrap_${id}`);
+                wrap.querySelector('.tc-comp-mode').value = 'prem'; wrap.querySelector('.tc-comp-cur').value = 'CNY'; wrap.querySelector('.tc-comp-val').value = 0; updateCompPnL(id);
+            });
+        });
+    }
+
+    function updateCompPnL(id) {
+        const wrap = document.getElementById(`comp_wrap_${id}`); if(!wrap) return;
+        const isChecked = wrap.querySelector('.tc-comp-cb').checked;
+        const eRem = document.getElementById(`comp_rem_${id}`), eSell = document.getElementById(`comp_sell_${id}`), ePnl = document.getElementById(`comp_pnl_${id}`);
+        const data = window.__TradeServerData[id]; const tDate = document.getElementById('tc-trade-date').value;
+        const remCNY = calcRemain(data.price, data.currency, data.cycle, data.expiry, tDate); eRem.textContent = `¥ ${remCNY.toFixed(2)}`;
+        
+        // 【核心修改】：如果是主机器，隐藏价格框，提示“见上方”
+        const mainId = document.getElementById('tc-server-select').value;
+        if (id === mainId) {
+            wrap.querySelector('.tc-comp-pricing').classList.add('tc-hidden');
+            eSell.innerHTML = '<span style="color:var(--accent-11);font-weight:bold;">主机器(见上方)</span>';
+            ePnl.textContent = '-'; ePnl.className = ''; return;
+        }
+
+        if (!isChecked) { eSell.textContent = '-'; ePnl.textContent = '-'; ePnl.className = ''; return; }
+
+        const mode = wrap.querySelector('.tc-comp-mode').value, cur = wrap.querySelector('.tc-comp-cur').value, valInp = parseFloat(wrap.querySelector('.tc-comp-val').value);
+        if (isNaN(valInp)) { eSell.textContent = '待填'; ePnl.textContent = '-'; ePnl.className = ''; return; }
+
+        let sellCNY = 0, pnlCNY = 0; const valCNY = convertToCNY(valInp, cur);
+        if (mode === 'prem') { pnlCNY = valCNY; sellCNY = remCNY + pnlCNY; } else { sellCNY = valCNY; pnlCNY = sellCNY - remCNY; }
+        
+        const rate = remCNY > 0 ? (pnlCNY / remCNY * 100).toFixed(2) : 0; eSell.textContent = `¥ ${sellCNY.toFixed(2)}`;
+        let rStr = pnlCNY === 0 ? "(平价)" : `(${rate > 0 ? '+' : ''}${rate}%)`;
+        ePnl.textContent = `${pnlCNY > 0 ? '+' : ''}${pnlCNY.toFixed(2)} ${rStr}`; ePnl.className = pnlCNY > 0 ? 'tc-text-profit' : (pnlCNY < 0 ? 'tc-text-loss' : '');
+    }
+
+    function populateDropdown() {
+        const selectEl = document.getElementById('tc-server-select'); selectEl.innerHTML = '<option value="">-- 手动填或从探针选择 --</option>';
+        const bQuickEl = document.getElementById('b_quick_import'); bQuickEl.innerHTML = '<option value="">-- 手动填或点此快捷选择 --</option>';
+        
+        const cached = window.__TradeServerData || {};
+        for (const [id, data] of Object.entries(cached)) { 
+            selectEl.appendChild(new Option(`${data.name} (${data.currency} ${data.price})`, id)); 
+            bQuickEl.appendChild(new Option(`${data.name}`, data.name));
+        }
+        renderCompanionList();
+
+        bQuickEl.addEventListener('change', function() { if (this.value) { document.getElementById('b_mer').value = this.value; } });
+
+        const cards = document.querySelectorAll('.rounded-lg.border.bg-card');
+        if (cards.length < 3 || window.location.pathname.includes('/server/')) {
+            const title = document.title || '', header = document.body.textContent.substring(0, 800) || '';
+            for (const [id, data] of Object.entries(cached)) { if (title.includes(data.name) || header.includes(data.name)) { selectEl.value = id; selectEl.dispatchEvent(new Event('change')); break; } }
+        }
+    }
+
+    document.getElementById('tc-server-select').addEventListener('change', function() {
+        const val = this.value; if (!val || !window.__TradeServerData[val]) return; const d = window.__TradeServerData[val];
+        document.getElementById('tc-price').value = d.price; document.getElementById('tc-currency').value = d.currency; document.getElementById('tc-cycle').value = d.cycle; if(d.expiry) document.getElementById('tc-expiry').value = d.expiry;
+        document.getElementById('f_mer').value = (d.merchant ? d.merchant + ' ' : '') + d.name.split('(')[0].trim(); document.getElementById('f_reg').value = d.region || ''; document.getElementById('f_bw').value = d.bandwidth; document.getElementById('f_tr').value = d.traffic; document.getElementById('f_rt').value = d.routing; document.getElementById('f_v4').checked = d.ipv4; document.getElementById('f_v6').checked = d.ipv6;
+        
+        // 【核心修改】：自动给主机器打勾并锁定，释放之前选择的机器
+        document.querySelectorAll('.tc-comp-cb').forEach(cb => { 
+            if (cb.value === val) {
+                cb.disabled = true; cb.checked = true; 
+            } else if (cb.disabled) {
+                cb.disabled = false; cb.checked = false;
+            }
+        }); 
+        // 刷新列表 UI
+        document.querySelectorAll('.tc-multi-item').forEach(el => updateCompPnL(el.id.replace('comp_wrap_','')));
+        calculateTrade();
+    });
+
+    document.getElementById('f_pp').addEventListener('change', (e) => e.target.checked ? document.getElementById('wrap_pp').classList.remove('tc-hidden') : document.getElementById('wrap_pp').classList.add('tc-hidden'));
+    document.getElementById('f_multi').addEventListener('change', (e) => { document.getElementById('wrap_multi').classList.toggle('tc-hidden', !e.target.checked); if(e.target.checked) document.querySelectorAll('.tc-multi-item').forEach(el => updateCompPnL(el.id.replace('comp_wrap_',''))); });
+
+    function validateForm() {
+        if (window.__CurrentMode === 'sell') {
+            if (!document.getElementById('tc-price').value) return "请填写【购入原价】";
+            if (!document.getElementById('tc-expiry').value) return "请选择【到期时间】";
+            if (!document.getElementById('tc-trade-date').value) return "请选择【交易日期】";
+            if (!document.getElementById('tc-sell-price').value) return "请填写【明盘价】或【溢价】";
+            if (!document.getElementById('f_mer').value.trim()) return "请填写【机器/商家名称】";
+        } else {
+            if (!document.getElementById('b_mer').value.trim()) return "请填写求购的【目标商家/型号】";
+            if (!document.getElementById('b_budget').value) return "请填写您的【预算】金额";
+        }
+        return null;
+    }
+
+    // ==========================================
+    // 6. 购物车系统
+    // ==========================================
+    function getFormSnapshot() {
+        const err = validateForm(); if (err) { showToast('⚠️ ' + err); return null; }
+        
+        if (window.__CurrentMode === 'buy') {
+            const bVal = parseFloat(document.getElementById('b_budget').value), bCur = document.getElementById('b_cur').value;
+            return {
+                id: window.__TradeEditingId || 'cart_' + Date.now(), type: 'buy', isEdit: !!window.__TradeEditingId,
+                mer: document.getElementById('b_mer').value.trim(), bVal, bCur,
+                bIp: document.getElementById('b_ip').value, bUnl: document.getElementById('b_unlock').value, bTim: document.getElementById('b_time').value,
+                bAcc: document.getElementById('b_acc').value, bMul: document.getElementById('b_multi').value, bNt: document.getElementById('b_nt').value,
+                accSell: convertToCNY(bVal, bCur), accPrem: 0
+            };
+        } else {
+            const tDate = document.getElementById('tc-trade-date').value;
+            const mainRem = calcRemain(document.getElementById('tc-price').value, document.getElementById('tc-currency').value, document.getElementById('tc-cycle').value, document.getElementById('tc-expiry').value, tDate);
+            const sInp = parseFloat(document.getElementById('tc-sell-price').value), sCur = document.getElementById('tc-sell-currency').value;
+            let mainSell = 0, mainPrem = 0;
+            if (isPremiumMode) { mainPrem = convertToCNY(sInp, sCur); mainSell = mainRem + mainPrem; } else { mainSell = convertToCNY(sInp, sCur); mainPrem = mainSell - mainRem; }
+
+            let companions = []; let totalCompRem = 0, totalCompSell = 0, totalCompPrem = 0;
+        if (document.getElementById('f_multi').checked) {
+            document.querySelectorAll('.tc-comp-cb:checked').forEach(cb => {
+                const id = cb.value; 
+                // 【核心修改】：拦截主机器，防止它被当作伴生机重复计入总价
+                if (id === document.getElementById('tc-server-select').value) return;
+
+                const cData = window.__TradeServerData[id]; const wrap = document.getElementById(`comp_wrap_${id}`);
+                const mode = wrap.querySelector('.tc-comp-mode').value, cur = wrap.querySelector('.tc-comp-cur').value, valInp = parseFloat(wrap.querySelector('.tc-comp-val').value) || 0;
+                const cRem = calcRemain(cData.price, cData.currency, cData.cycle, cData.expiry, tDate);
+                let cSell = 0, cPrem = 0; const valCNY = convertToCNY(valInp, cur);
+                if (mode === 'prem') { cPrem = valCNY; cSell = cRem + cPrem; } else { cSell = valCNY; cPrem = cSell - cRem; }
+                
+                totalCompRem += cRem; totalCompSell += cSell; totalCompPrem += cPrem;
+                const cycMap = {"365":"年付","182.5":"半年付","90":"季付","30":"月付"}; const cRate = cRem > 0 ? (cPrem / cRem * 100).toFixed(2) : 0;
+                companions.push({ id, name: cData.name, cost: `${cData.price} ${cData.currency}/${cycMap[cData.cycle]}`, expiry: cData.expiry, rem: cRem, sell: cSell, prem: cPrem, rateStr: cPrem===0?"平价出":`溢价 ${cPrem>0?'+':''}${cPrem.toFixed(2)} (${cRate>0?'+':''}${cRate}%)`, rawMode: mode, rawCur: cur, rawVal: valInp });
+            });
+        }
+
+            const cycMap = {"365":"年付","182.5":"半年付","90":"季付","30":"月付"};
+            const mRate = mainRem > 0 ? (mainPrem / mainRem * 100).toFixed(2) : 0;
+            return {
+                id: window.__TradeEditingId || 'cart_' + Date.now(), type: 'sell', isEdit: !!window.__TradeEditingId,
+                mer: document.getElementById('f_mer').value.trim(), reg: document.getElementById('f_reg').value || '未说明', bw: document.getElementById('f_bw').value || '未说明', tr: document.getElementById('f_tr').value || '未说明', rt: document.getElementById('f_rt').value || '未说明', tm: document.getElementById('f_tm').value || '未说明', nt: document.getElementById('f_nt').value,
+                v4: document.getElementById('f_v4').checked, v6: document.getElementById('f_v6').checked, pp: document.getElementById('f_pp').checked, ppSafe: document.getElementById('f_pp_safe').checked, ali: document.getElementById('f_ali').checked,
+                rawPrice: document.getElementById('tc-price').value, rawCur: document.getElementById('tc-currency').value, rawCyc: document.getElementById('tc-cycle').value, rawExp: document.getElementById('tc-expiry').value, rawSell: sInp, rawSellCur: sCur, rawPremiumMode: isPremiumMode,
+                isMulti: document.getElementById('f_multi').checked, companions, pOrig: `${document.getElementById('tc-price').value} ${document.getElementById('tc-currency').value} / ${cycMap[document.getElementById('tc-cycle').value]}`, pExp: document.getElementById('tc-expiry').value,
+                mainRem, mainSell, mainPrem, mainRateStr: mainPrem===0?"平价出":`溢价 ${mainPrem>0?'+':''}${mainPrem.toFixed(2)} (${mRate>0?'+':''}${mRate}%)`,
+                accRem: mainRem + totalCompRem, accSell: mainSell + totalCompSell, accPrem: mainPrem + totalCompPrem
+            };
+        }
+    }
+
+    function renderCartView() {
+        const wrap = dom.cartItemsWrapper; wrap.innerHTML = ''; dom.cartCount.textContent = window.__TradeCart.length;
+        if (window.__TradeCart.length === 0) { wrap.innerHTML = '<div style="text-align:center; padding:40px; color:var(--gray-11);">暂存车为空<br><br>请在左侧表单配置并加入</div>'; document.querySelector('.tc-grand-total')?.remove(); return; }
+
+        let grandTot = 0, grandPnl = 0; let hasSell = false;
+        window.__TradeCart.forEach((item, idx) => {
+            if (item.type === 'buy') {
+                wrap.innerHTML += `
+                    <div class="tc-cart-card">
+                        <div class="tc-cart-card-header"><span>${idx+1}. <span class="tc-cart-badge-buy">收</span> ${item.mer}</span></div>
+                        <div class="tc-cart-detail">求购预算: <span style="font-weight:bold;">${formatCur(item.bVal, item.bCur)}</span></div>
+                        <div class="tc-cart-actions"><button class="tc-action-btn edit" data-id="${item.id}">✏️ 编辑</button><button class="tc-action-btn del" data-id="${item.id}">🗑️ 移除</button></div>
+                    </div>`;
+            } else {
+                hasSell = true;
+                grandTot += item.accSell; grandPnl += item.accPrem;
+                const pClass = item.accPrem > 0 ? 'tc-text-profit' : (item.accPrem < 0 ? 'tc-text-loss' : '');
+                const pText = item.accPrem > 0 ? '+' + item.accPrem.toFixed(2) : item.accPrem.toFixed(2);
+                let compHtml = '';
+                if (item.companions.length > 0) {
+                    compHtml = '<div class="tc-cart-comp">';
+                    item.companions.forEach(c => { const cClass = c.prem > 0 ? 'tc-text-profit' : (c.prem < 0 ? 'tc-text-loss' : ''); compHtml += `<div class="tc-cart-detail">↳ ${c.name} : <span>明盘 ¥${c.sell.toFixed(2)} (<span class="${cClass}">${c.prem>0?'+':''}${c.prem.toFixed(2)}</span>)</span></div>`; });
+                    compHtml += '</div>';
+                }
+                wrap.innerHTML += `
+                    <div class="tc-cart-card">
+                        <div class="tc-cart-card-header"><span>${idx+1}. <span class="tc-cart-badge-sell">出</span> ${item.mer}</span></div>
+                        <div class="tc-cart-detail">主机器盈亏: <span class="${item.mainPrem > 0 ? 'tc-text-profit' : (item.mainPrem < 0 ? 'tc-text-loss' : '')}">${item.mainPrem > 0 ? '+' : ''}${item.mainPrem.toFixed(2)}</span></div>
+                        ${compHtml}
+                        <div class="tc-cart-detail" style="margin-top:8px; font-weight:bold; color:var(--gray-12);">本单总明盘: <span>¥ ${item.accSell.toFixed(2)}</span></div>
+                        <div class="tc-cart-detail" style="font-weight:bold; color:var(--gray-12);">本单总盈亏: <span class="${pClass}">${pText}</span></div>
+                        <div class="tc-cart-actions"><button class="tc-action-btn edit" data-id="${item.id}">✏️ 编辑</button><button class="tc-action-btn del" data-id="${item.id}">🗑️ 移除</button></div>
+                    </div>`;
+            }
+        });
+
+        // 处理全局总结卡片
+        const existingGrand = document.querySelector('.tc-grand-total');
+        if (existingGrand) existingGrand.remove();
+
+        if (hasSell) {
+            const gClass = grandPnl > 0 ? 'profit' : (grandPnl < 0 ? 'loss' : '');
+            const gColor = grandPnl > 0 ? 'tc-text-profit' : (grandPnl < 0 ? 'tc-text-loss' : '');
+            wrap.insertAdjacentHTML('beforeend', `
+                <div class="tc-grand-total ${gClass}">
+                    <div class="tc-grand-row"><span>出机总明盘：</span><span>¥ ${grandTot.toFixed(2)}</span></div>
+                    <div class="tc-grand-row"><span>出机总盈亏：</span><span class="${gColor}">${grandPnl > 0 ? '+' : ''}${grandPnl.toFixed(2)}</span></div>
+                </div>
+            `);
+        }
+
+        document.querySelectorAll('.tc-action-btn.del').forEach(b => b.addEventListener('click', (e) => { window.__TradeCart = window.__TradeCart.filter(i => i.id !== e.target.getAttribute('data-id')); renderCartView(); }));
+        document.querySelectorAll('.tc-action-btn.edit').forEach(b => b.addEventListener('click', (e) => loadEdit(e.target.getAttribute('data-id'))));
+    }
+
+    function loadEdit(id) {
+        const item = window.__TradeCart.find(i => i.id === id); if(!item) return;
+        window.__TradeEditingId = id; 
+        
+        if (item.type === 'buy') {
+            document.getElementById('tc-tab-buy').click();
+            document.getElementById('b_mer').value = item.mer; document.getElementById('b_cur').value = item.bCur; document.getElementById('b_budget').value = item.bVal;
+            document.getElementById('b_ip').value = item.bIp; document.getElementById('b_unlock').value = item.bUnl; document.getElementById('b_time').value = item.bTim; document.getElementById('b_acc').value = item.bAcc; document.getElementById('b_multi').value = item.bMul; document.getElementById('b_nt').value = item.bNt;
+        } else {
+            document.getElementById('tc-tab-sell').click();
+            document.getElementById('tc-price').value = item.rawPrice; document.getElementById('tc-currency').value = item.rawCur;
+            document.getElementById('tc-cycle').value = item.rawCyc; document.getElementById('tc-expiry').value = item.rawExp;
+            document.getElementById('tc-sell-price').value = item.rawSell; document.getElementById('tc-sell-currency').value = item.rawSellCur;
+            isPremiumMode = item.rawPremiumMode; document.getElementById('tc-mode-toggle').click(); document.getElementById('tc-mode-toggle').click(); 
+            
+            document.getElementById('f_mer').value = item.mer; document.getElementById('f_reg').value = item.reg === '未说明' ? '' : item.reg;
+            document.getElementById('f_bw').value = item.bw === '未说明' ? '' : item.bw; document.getElementById('f_tr').value = item.tr === '未说明' ? '' : item.tr;
+            document.getElementById('f_rt').value = item.rt === '未说明' ? '' : item.rt; document.getElementById('f_tm').value = item.tm === '未说明' ? '' : item.tm; document.getElementById('f_nt').value = item.nt || '';
+            document.getElementById('f_v4').checked = item.v4; document.getElementById('f_v6').checked = item.v6; document.getElementById('f_ali').checked = item.ali;
+            document.getElementById('f_pp').checked = item.pp; document.getElementById('f_pp').dispatchEvent(new Event('change')); document.getElementById('f_pp_safe').checked = item.ppSafe;
+
+            document.getElementById('f_multi').checked = item.isMulti; document.getElementById('f_multi').dispatchEvent(new Event('change'));
+            document.querySelectorAll('.tc-comp-cb').forEach(cb => cb.checked = false); 
+            item.companions.forEach(c => {
+                const cb = document.querySelector(`.tc-comp-cb[value="${c.id}"]`);
+                if(cb) { cb.checked = true; cb.dispatchEvent(new Event('change')); const wrap = document.getElementById(`comp_wrap_${c.id}`); wrap.querySelector('.tc-comp-mode').value = c.rawMode; wrap.querySelector('.tc-comp-cur').value = c.rawCur; wrap.querySelector('.tc-comp-val').value = c.rawVal; updateCompPnL(c.id); }
+            });
+            calculateTrade();
+        }
+        
+        dom.container.style.transform = 'translateX(0)'; dom.mainTitle.textContent = '编辑回档数据...';
+        window.__TradeCart = window.__TradeCart.filter(i => i.id !== id); renderCartView(); showToast('已回档至表单，请修改后重新存入');
+    }
+
+    document.getElementById('tc-btn-add-cart').addEventListener('click', () => {
+        const snap = getFormSnapshot(); if (!snap) return;
+        window.__TradeCart.push(snap); window.__TradeEditingId = null; 
+        
+        if (window.__CurrentMode === 'buy') {
+            ['b_mer','b_budget','b_unlock','b_time','b_nt'].forEach(id => document.getElementById(id).value = '');
+        } else {
+            ['tc-server-select','tc-price','tc-expiry','tc-sell-price','f_mer','f_reg','f_bw','f_tr','f_rt','f_nt'].forEach(id => document.getElementById(id).value = '');
+            document.getElementById('f_multi').checked = false; document.getElementById('f_multi').dispatchEvent(new Event('change'));
+            document.querySelectorAll('.tc-comp-cb').forEach(cb => { cb.checked = false; cb.dispatchEvent(new Event('change')); }); calculateTrade();
+        }
+        dom.mainTitle.textContent = '交易与发帖助手'; renderCartView(); showToast('✅ 已存入结算台');
+    });
+
+    document.getElementById('tc-btn-go-cart').addEventListener('click', () => { renderCartView(); dom.container.style.transform = 'translateX(-33.333%)'; dom.mainTitle.textContent = '结算台预收银'; });
+    document.getElementById('tc-btn-back-form').addEventListener('click', () => { dom.container.style.transform = 'translateX(0)'; dom.mainTitle.textContent = '交易与发帖助手'; });
+
+    // ==========================================
+    // 7. 终极 Markdown 生成台
+    // ==========================================
+    document.getElementById('tc-btn-gen-sell').addEventListener('click', () => generateFinalPost('sell'));
+    document.getElementById('tc-btn-gen-buy').addEventListener('click', () => generateFinalPost('buy'));
+
+    function generateFinalPost(targetType) {
+    // 1. 筛选当前要生成的类型
+    let items = window.__TradeCart.filter(i => i.type === targetType);
+    
+    // 2. 自动存入逻辑：如果结算台空且表单有内容，尝试抓取
+    if (items.length === 0) { 
+        if (window.__CurrentMode === targetType && !validateForm()) {
+            const snap = getFormSnapshot(); 
+            if (snap) { 
+                window.__TradeCart.push(snap); 
+                items.push(snap); 
+                renderCartView(); 
+            }
+        } else { 
+            showToast(`⚠️ 暂存车中没有【${targetType === 'sell' ? '出' : '收'}机】内容`); 
+            return; 
+        }
+    }
+    
+    let template = ''; 
+    let titleParts = [];
+    const g_contact = document.getElementById('f_g_contact').value.trim() || '站内私信 / PM';
+    const g_note = document.getElementById('f_g_note').value.trim() || '支付宝口令红包或中介交易，中介费自理';
+
+    if (targetType === 'sell') {
+        // ================= 【出机帖】核心逻辑 =================
+        let grandTot = 0, grandPnl = 0, bodyBlocks = "";
+        
+        items.forEach((acc, idx) => {
+            grandTot += acc.accSell; 
+            grandPnl += acc.accPrem; 
+            
+            // 拼接单笔账号的身份：商家名+机器 [续费价格/周期]
+            let currentTitlePart = `${acc.mer} [${acc.pOrig}]`;
+            
+            // 如果有伴生机，标题里也带上伴生机的身份
+            if (acc.isMulti && acc.companions.length > 0) {
+                let compTitles = acc.companions.map(c => `${c.name} [${c.cost}]`);
+                currentTitlePart += ' + ' + compTitles.join(' + ');
+            }
+            titleParts.push(currentTitlePart);
+            
+            // 基础详情排版
+            let ipStr = []; if(acc.v4) ipStr.push('IPv4'); if(acc.v6) ipStr.push('IPv6'); const ipFinal = ipStr.length > 0 ? ipStr.join('/') : '未说明';
+            let payStr = []; if(acc.ali) payStr.push('支付宝'); if(acc.pp) payStr.push(`PayPal${acc.ppSafe ? '(已超半年防争议)' : ''}`); let payFinal = payStr.length > 0 ? ` (购入: ${payStr.join('/')})` : '';
+            let ntStr = acc.nt ? `\n- 其他说明：${acc.nt}` : '';
+
+            // 详情块
+            bodyBlocks += `### ${idx+1}. 账号主体：${acc.mer}\n**【基本参数】**\n- 节点配置：${acc.reg} | ${acc.bw} | ${acc.tr} | ${acc.rt}\n- IP 支持：${ipFinal}\n- 购入成本：${acc.pOrig} (到期: ${acc.pExp})\n\n**【独立账单】**\n- 剩余价值：￥${acc.mainRem.toFixed(2)}\n- 本机明盘：**￥${acc.mainSell.toFixed(2)}** (${acc.mainRateStr})\n`;
+            
+            if (acc.isMulti && acc.companions.length > 0) {
+                bodyBlocks += `\n**【同号伴生机】**\n`;
+                acc.companions.forEach((c, cIdx) => { 
+                    bodyBlocks += `- 附加机 ${cIdx+1}：${c.name}\n  续费：${c.cost} | 到期：${c.expiry} | 剩余价值：￥${c.rem.toFixed(2)}\n  本机明盘：**￥${c.sell.toFixed(2)}** (${c.rateStr})\n`; 
+                });
+            }
+            bodyBlocks += `\n**【本账号汇总】**\n`;
+            if (acc.isMulti) bodyBlocks += `- 账号总剩余：￥${acc.accRem.toFixed(2)}\n`;
+            bodyBlocks += `- 账号总明盘：**￥${acc.accSell.toFixed(2)}** (账号总盈亏 ${acc.accPrem > 0 ? '+' : ''}${acc.accPrem.toFixed(2)})\n- 交易方式：${acc.tm}${payFinal}${ntStr}\n\n---\n\n`;
+        });
+
+        // 全局盈亏摘要
+        let grandRate = (grandTot - grandPnl > 0) ? (grandPnl / (grandTot - grandPnl) * 100).toFixed(2) : 0;
+        let rateStr = grandPnl === 0 ? "平价" : `溢价 ${grandPnl > 0 ? '+' : ''}${grandPnl.toFixed(2)}, ${grandRate > 0 ? '+' : ''}${grandRate}%`;
+        
+        // 【核心修改点】：标题包含 总出价
+        template = `【出】${titleParts.join(' + ')} | 总出价 ￥${grandTot.toFixed(2)} (${rateStr})\n\n` + bodyBlocks;
+        
+        if (items.length > 1) {
+            template += `**全部打包价格：** **￥${grandTot.toFixed(2)}** (${rateStr})\n\n`;
+        }
+        
+    } else {
+        // ================= 【收机帖】核心逻辑 =================
+        let buyBlocks = "";
+        let totalBudget = 0;
+        
+        items.forEach((b, idx) => {
+            totalBudget += b.accSell; // accSell 在 Snapshot 里存的是预算的 CNY 数值
+            titleParts.push(`${b.mer}`);
+            let ntStr = b.bNt ? `\n- 备注说明：${b.bNt}` : '';
+            buyBlocks += `### ${idx+1}. 求购：${b.mer}\n- **我的预算**：**${formatCur(b.bVal, b.bCur)}**\n- **线路/IP**：${b.bIp}\n- **解锁要求**：${b.bUnl || '无特殊要求'}\n- **到期要求**：${b.bTim || '无特殊要求'}\n- **交易方式**：${b.bAcc}\n- **多机接受度**：${b.bMul}${ntStr}\n\n---\n\n`;
+        });
+        
+        // 收机标题：包含总预算
+        template = `【收】${titleParts.join(' + ')} | 总预算 ￥${totalBudget.toFixed(2)}\n\n` + buyBlocks;
+    }
+
+    const finalMd = template + `**联系方式：** ${g_contact}\n**交易声明：** ${g_note}`;
+    
+    document.getElementById('tc-post-content').value = finalMd;
+    dom.container.style.transform = 'translateX(-66.666%)'; 
+    dom.mainTitle.textContent = '预览与修改';
+}
+
+    document.getElementById('tc-btn-back-cart').addEventListener('click', () => { dom.container.style.transform = 'translateX(-33.333%)'; dom.mainTitle.textContent = '结算台预收银'; });
+    
+    document.getElementById('tc-btn-copy-done').addEventListener('click', () => {
+        navigator.clipboard.writeText(document.getElementById('tc-post-content').value).then(() => {
+            showToast(`✅ 完美！帖子内容已复制！`);
+        }).catch(err => { showToast('❌ 复制失败，请手动全选复制'); });
+    });
+
+    // ==========================================
+    // 8. 启停控制 (仅扫描一次并持久化)
+    // ==========================================
+    const ball = document.getElementById('trade-calc-ball'), overlay = document.getElementById('trade-calc-overlay'), modal = document.getElementById('trade-calc-modal'), closeBtn = document.getElementById('trade-calc-close');
+    ball.addEventListener('click', () => { fastScanDOM(); populateDropdown(); renderCartView(); overlay.classList.add('show'); requestAnimationFrame(() => modal.style.transform = 'scale(1)'); });
+    function closeModal() { overlay.classList.remove('show'); modal.style.transform = 'scale(0.95)'; setTimeout(() => { dom.container.style.transform = 'translateX(0)'; dom.mainTitle.textContent = '交易与发帖助手'; }, 300); }
+    closeBtn.addEventListener('click', closeModal); overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+    
+    // 初始化时静默抓取一次存入缓存
+    setTimeout(fastScanDOM, 1000);
+
+})();
+</script>
